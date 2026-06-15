@@ -196,9 +196,8 @@ function setupActivitiesSheet(ss) {
   sh.setColumnWidth(10, 160);
   sh.setColumnWidth(11, 100);
 
-  // Protect the sheet — only editors (you) can change it
-  const protection = sh.protect().setDescription('Activities master list — read only');
-  protection.setWarningOnly(true);
+  // No sheet-level protection — editors can add new activities directly.
+  // The warning-only mode is intentionally omitted so rows can be appended freely.
 
   // Colour rows by Strategic Output
   colorActivitiesByOutput(sh);
@@ -232,11 +231,12 @@ function setupTasksSheet(ss) {
   sh.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeaderRow(sh, headers.length);
 
-  // Dropdown for Activity Code (col 2)
-  const activityCodes = ACTIVITIES.map(a => a[2]);
+  // Dropdown for Activity Code (col 2) — references the Activities sheet live
+  // so new activities added to that sheet automatically appear here
+  const actSh = ss.getSheetByName(CONFIG.SHEET_ACTIVITIES);
   const actRule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(activityCodes, true)
-    .setAllowInvalid(false)
+    .requireValueInRange(actSh.getRange('C2:C500'), true)
+    .setAllowInvalid(true) // warn but allow manual entry for activities added before refresh
     .build();
   sh.getRange(2, 2, 500, 1).setDataValidation(actRule);
 
@@ -678,9 +678,16 @@ function getTasksForActivity(activityCode) {
   return data.filter(r => r[1] === activityCode && r[0]).map(r => ({ code: r[0], name: r[5] }));
 }
 
-// Get all activity codes (called from dialog)
+// Get all activity codes from the Activities sheet (called from dialog)
+// Reads live so new rows added directly to the sheet are picked up immediately
 function getActivityCodes() {
-  return ACTIVITIES.map(a => ({ code: a[2], name: a[3], partner: a[6] }));
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_ACTIVITIES);
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+  const data = sh.getRange(2, 1, lastRow - 1, 8).getValues();
+  return data
+    .filter(r => r[2]) // skip blank rows
+    .map(r => ({ code: r[2], name: r[3], partner: r[6] }));
 }
 
 // =============================================================================

@@ -134,6 +134,7 @@ function onOpen() {
     .addItem('Initial Setup (run once)', 'setupWorkbook')
     .addSeparator()
     .addItem('Refresh Dashboard', 'refreshDashboard')
+    .addItem('View Gantt Chart', 'showGanttChart')
     .addSeparator()
     .addItem('Add Tasks to an Activity', 'showAddTaskDialog')
     .addItem('Log Progress on a Task', 'showProgressDialog')
@@ -226,7 +227,7 @@ function setupTasksSheet(ss) {
     'Task Code', 'Activity Code', 'Strategic Output', 'Sub-Output', 'Activity Name',
     'Task Name', 'Task Description', 'Assigned To',
     'Planned Start', 'Planned End', 'Weight (%)',
-    'Created By', 'Created Date', 'Status'
+    'Created By', 'Created Date', 'Status', 'Depends On (Task Code)'
   ];
   sh.getRange(1, 1, 1, headers.length).setValues([headers]);
   styleHeaderRow(sh, headers.length);
@@ -618,7 +619,8 @@ function saveTask(data) {
     data.weight || '',
     Session.getActiveUser().getEmail(),
     new Date(),
-    'Not Started'
+    'Not Started',
+    data.dependsOn || ''
   ];
 
   taskSh.appendRow(row);
@@ -685,6 +687,390 @@ function getActivityCodes() {
     .filter(r => r[2]) // skip blank rows
     .map(r => ({ code: r[2], name: r[3], partner: r[6] }));
 }
+
+// =============================================================================
+// GANTT CHART
+// =============================================================================
+
+function showGanttChart() {
+  const html = HtmlService.createHtmlOutput(GANTT_HTML)
+    .setWidth(1100)
+    .setHeight(680)
+    .setTitle('MCA Gantt Chart');
+  SpreadsheetApp.getUi().showModalDialog(html, 'MCA Project Gantt Chart');
+}
+
+function getGanttData() {
+  const ss      = SpreadsheetApp.getActiveSpreadsheet();
+  const actSh   = ss.getSheetByName(CONFIG.SHEET_ACTIVITIES);
+  const taskSh  = ss.getSheetByName(CONFIG.SHEET_TASKS);
+  const progSh  = ss.getSheetByName(CONFIG.SHEET_PROGRESS);
+  const tz      = Session.getScriptTimeZone();
+
+  const actData  = actSh.getLastRow()  > 1 ? actSh.getRange(2,  1, actSh.getLastRow()  - 1, 11).getValues() : [];
+  const taskData = taskSh.getLastRow() > 1 ? taskSh.getRange(2, 1, taskSh.getLastRow() - 1, 15).getValues() : [];
+  const progData = progSh.getLastRow() > 1 ? progSh.getRange(2, 1, progSh.getLastRow() - 1, 14).getValues() : [];
+
+  // Latest approved % per task
+  const taskPct = {};
+  progData.filter(r => r[10] === 'Approved').forEach(p => {
+    const code = p[1], pct = Number(p[6]) || 0;
+    if (!taskPct[code] || pct > taskPct[code]) taskPct[code] = pct;
+  });
+
+  function fmtDate(v) {
+    if (!v) return '';
+    try {
+      const d = new Date(v);
+      return isNaN(d) ? '' : Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+    } catch(e) { return ''; }
+  }
+
+  const activities = actData
+    .filter(r => r[2])
+    .map(r => {
+      const actCode = r[2];
+      const tasks = taskData
+        .filter(t => t[1] === actCode && t[0])
+        .map(t => ({
+          code:       t[0],
+          name:       t[5],
+          assignedTo: t[7],
+          start:      fmtDate(t[8]),
+          end:        fmtDate(t[9]),
+          dependsOn:  (t[14] || '').toString().trim(),
+          status:     t[13] || 'Not Started',
+          pctComplete: taskPct[t[0]] || 0,
+        }));
+      return {
+        code:      actCode,
+        name:      r[3],
+        so:        r[0],
+        subOutput: r[1],
+        partner:   r[6],
+        ciStaff:   r[7],
+        scheduled: r[4],
+        tasks,
+      };
+    });
+
+  return { activities };
+}
+
+const GANTT_HTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:12px;background:#fff;overflow:hidden}
+#toolbar{display:flex;align-items:center;gap:10px;padding:6px 12px;background:#1c4587;color:#fff;flex-wrap:wrap}
+#toolbar strong{font-size:13px;white-space:nowrap}
+#toolbar label{font-size:11px;white-space:nowrap}
+#toolbar select,#toolbar input{padding:3px 6px;font-size:11px;border-radius:3px;border:none}
+.legend{display:flex;gap:10px;margin-left:auto;align-items:center;font-size:11px}
+.ld{width:12px;height:12px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle}
+#wrap{display:flex;height:calc(100vh - 38px)}
+#labels{width:280px;flex-shrink:0;border-right:2px solid #1c4587;overflow:hidden;display:flex;flex-direction:column}
+#lhdr{height:52px;background:#e8f0fe;border-bottom:1px solid #ccc;display:flex;align-items:center;padding:0 8px;font-weight:bold;font-size:11px;color:#1c4587;flex-shrink:0}
+#lbody{overflow-y:auto;flex:1}
+#chart{flex:1;overflow:auto;position:relative}
+#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:14px;color:#666}
+.grp{background:#1c4587;color:#fff;font-weight:bold;font-size:11px;padding:3px 8px;height:22px;display:flex;align-items:center}
+.sub{background:#dce8fb;color:#1c4587;font-weight:bold;font-size:10px;padding:2px 14px;height:18px;display:flex;align-items:center}
+.arow{height:36px;border-bottom:1px solid #eee;display:flex;align-items:center;padding:0 8px;cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arow:hover{background:#f0f4ff}
+.acode{color:#666;font-weight:bold;margin-right:4px;font-size:10px}
+.aname{font-size:10px;overflow:hidden;text-overflow:ellipsis}
+#tooltip{position:fixed;background:#333;color:#fff;padding:6px 10px;border-radius:4px;font-size:11px;pointer-events:none;display:none;z-index:999;max-width:280px;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <strong>MCA Gantt Chart</strong>
+  <label>Output: <select id="fSO" onchange="applyFilter()">
+    <option value="">All Outputs</option>
+    <option value="SO1">SO1 – Policy &amp; Governance</option>
+    <option value="SO2">SO2 – Awareness &amp; Research</option>
+    <option value="SO3">SO3 – Livelihoods &amp; Economy</option>
+  </select></label>
+  <label>Sub-Output: <select id="fSub" onchange="applyFilter()"><option value="">All</option></select></label>
+  <label>Show: <select id="fShow" onchange="applyFilter()">
+    <option value="all">All activities</option>
+    <option value="tasks">Activities with tasks only</option>
+  </select></label>
+  <div class="legend">
+    <span><span class="ld" style="background:#4a7c59"></span>SO1</span>
+    <span><span class="ld" style="background:#3d6b9e"></span>SO2</span>
+    <span><span class="ld" style="background:#b8860b"></span>SO3</span>
+    <span><span class="ld" style="background:#ccc"></span>No tasks yet</span>
+    <span style="color:#e53935;font-size:11px">— Today</span>
+    <span style="color:#e53935;font-size:11px">→ Dependency</span>
+  </div>
+</div>
+<div id="wrap">
+  <div id="labels"><div id="lhdr">Activity</div><div id="lbody"></div></div>
+  <div id="chart"><div id="loading">Loading chart data…</div><canvas id="cv"></canvas></div>
+</div>
+<div id="tooltip"></div>
+
+<script>
+var RAW=null, FILTERED=null;
+var ROW_H=36, GRP_H=22, SUB_H=18, HDR_H=52;
+var SO_COLOR={SO1:'#4a7c59',SO2:'#3d6b9e',SO3:'#b8860b'};
+var SO_LIGHT={SO1:'#d9ead3',SO2:'#dae8fc',SO3:'#fff2cc'};
+var taskPos={};
+
+function qStart(q){var m=q&&q.match(/Q([1-4]) (\\d{4})/);if(!m)return null;return new Date(+m[2],(+m[1]-1)*3,1);}
+function qEnd(q){var m=q&&q.match(/Q([1-4]) (\\d{4})/);if(!m)return null;return new Date(+m[2],+m[1]*3,0);}
+function pd(v){if(!v)return null;var d=new Date(v);return isNaN(d)?null:d;}
+
+function applyFilter(){
+  if(!RAW)return;
+  var fSO=document.getElementById('fSO').value;
+  var fSub=document.getElementById('fSub').value;
+  var fShow=document.getElementById('fShow').value;
+  // refresh sub-output options
+  var subSel=document.getElementById('fSub');
+  var curSub=subSel.value;
+  var subs=[...new Set(RAW.activities.filter(function(a){return !fSO||a.so===fSO;}).map(function(a){return a.subOutput;}))].sort();
+  subSel.innerHTML='<option value="">All</option>';
+  subs.forEach(function(s){var o=document.createElement('option');o.value=s;o.textContent=s;if(s===curSub)o.selected=true;subSel.appendChild(o);});
+
+  FILTERED=RAW.activities.filter(function(a){
+    if(fSO&&a.so!==fSO)return false;
+    if(fSub&&a.subOutput!==fSub)return false;
+    if(fShow==='tasks'&&a.tasks.length===0)return false;
+    return true;
+  });
+  drawLabels();
+  drawChart();
+}
+
+function drawLabels(){
+  var body=document.getElementById('lbody');
+  body.innerHTML='';
+  var curSO=null,curSub=null;
+  FILTERED.forEach(function(act){
+    if(act.so!==curSO){curSO=act.so;curSub=null;
+      var h=document.createElement('div');h.className='grp';
+      h.textContent=act.so+(act.so==='SO1'?' – Policy & Governance':act.so==='SO2'?' – Awareness & Research':' – Livelihoods & Economy');
+      body.appendChild(h);}
+    if(act.subOutput!==curSub){curSub=act.subOutput;
+      var h=document.createElement('div');h.className='sub';h.textContent='Sub-Output '+act.subOutput;body.appendChild(h);}
+    var r=document.createElement('div');r.className='arow';
+    r.title=act.code+': '+act.name+' | Partner: '+act.partner;
+    r.innerHTML='<span class="acode">'+act.code+'</span><span class="aname">'+act.name+'</span>';
+    body.appendChild(r);
+  });
+}
+
+function buildRows(){
+  var rows=[],curSO=null,curSub=null;
+  FILTERED.forEach(function(act){
+    if(act.so!==curSO){curSO=act.so;curSub=null;rows.push({type:'so',so:act.so,h:GRP_H});}
+    if(act.subOutput!==curSub){curSub=act.subOutput;rows.push({type:'sub',sub:act.subOutput,h:SUB_H});}
+    rows.push({type:'act',act:act,h:ROW_H});
+  });
+  return rows;
+}
+
+function drawChart(){
+  var cv=document.getElementById('cv');
+  var panel=document.getElementById('chart');
+  var rows=buildRows();
+
+  // Date range
+  var minD=new Date('2024-06-01'),maxD=new Date('2028-12-31');
+  FILTERED.forEach(function(act){
+    act.tasks.forEach(function(t){
+      var s=pd(t.start),e=pd(t.end);
+      if(s&&s<minD)minD=s; if(e&&e>maxD)maxD=e;
+    });
+    var qs=qStart(act.scheduled),qe=qEnd(act.scheduled);
+    if(qs&&qs<minD)minD=qs; if(qe&&qe>maxD)maxD=qe;
+  });
+
+  var totalH=rows.reduce(function(s,r){return s+r.h;},0)+HDR_H+4;
+  var totalW=Math.max(panel.clientWidth-4, 900);
+  cv.width=totalW; cv.height=totalH;
+  var ctx=cv.getContext('2d');
+  ctx.clearRect(0,0,totalW,totalH);
+
+  var DAY=86400000;
+  var span=(maxD-minD)/DAY;
+  var dayPx=totalW/span;
+  function xOf(d){return((d-minD)/DAY)*dayPx;}
+
+  // Header background
+  ctx.fillStyle='#e8f0fe'; ctx.fillRect(0,0,totalW,HDR_H);
+
+  // Quarter/year grid + labels
+  var y0=minD.getFullYear(), y1=maxD.getFullYear()+1;
+  for(var y=y0;y<=y1;y++){
+    for(var q=0;q<4;q++){
+      var qd=new Date(y,q*3,1);
+      if(qd<minD||qd>maxD)continue;
+      var x=xOf(qd);
+      ctx.strokeStyle=q===0?'#aaa':'#e0e0e0'; ctx.lineWidth=q===0?1.5:1;
+      ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,totalH);ctx.stroke();
+      ctx.fillStyle='#1c4587';
+      ctx.font=q===0?'bold 11px Arial':'10px Arial';
+      ctx.fillText(q===0?String(y):'Q'+(q+1),x+3,q===0?14:28);
+      ctx.fillStyle='#555'; ctx.font='10px Arial';
+      if(q>0)ctx.fillText('Q'+(q+1)+' '+y,x+3,42);
+    }
+  }
+
+  // Today line
+  var today=new Date();
+  if(today>=minD&&today<=maxD){
+    var tx=xOf(today);
+    ctx.save();ctx.strokeStyle='#e53935';ctx.lineWidth=2;ctx.setLineDash([4,3]);
+    ctx.beginPath();ctx.moveTo(tx,0);ctx.lineTo(tx,totalH);ctx.stroke();
+    ctx.setLineDash([]);ctx.fillStyle='#e53935';ctx.font='bold 10px Arial';
+    ctx.fillText('Today',tx+3,HDR_H-4);ctx.restore();
+  }
+
+  // Draw rows
+  taskPos={};
+  var cy=HDR_H;
+  rows.forEach(function(row){
+    if(row.type==='so'){
+      ctx.fillStyle='#1c4587';ctx.fillRect(0,cy,totalW,GRP_H);cy+=GRP_H;
+    } else if(row.type==='sub'){
+      ctx.fillStyle='#dce8fb';ctx.fillRect(0,cy,totalW,SUB_H);cy+=SUB_H;
+    } else {
+      var act=row.act;
+      var color=SO_COLOR[act.so]||'#666';
+      var light=SO_LIGHT[act.so]||'#eee';
+
+      // Row background
+      ctx.fillStyle=light+'44'; ctx.fillRect(0,cy,totalW,ROW_H);
+
+      if(act.tasks.length===0){
+        // Placeholder bar from scheduled quarter
+        var qs=qStart(act.scheduled),qe=qEnd(act.scheduled);
+        if(qs&&qe){
+          var bx=xOf(qs),bw=Math.max(xOf(qe)-bx,4);
+          var by=cy+10,bh=16;
+          ctx.fillStyle='#ddd';ctx.fillRect(bx,by,bw,bh);
+          ctx.strokeStyle='#bbb';ctx.lineWidth=1;ctx.strokeRect(bx,by,bw,bh);
+          ctx.fillStyle='#999';ctx.font='9px Arial';ctx.fillText('No tasks – '+act.scheduled,bx+3,by+bh-4);
+        }
+      } else {
+        // Assign tasks to lanes (detect parallelism)
+        var sorted=act.tasks.slice().sort(function(a,b){
+          var as=pd(a.start),bs=pd(b.start);
+          if(!as&&!bs)return 0; if(!as)return 1; if(!bs)return -1; return as-bs;
+        });
+        var laneEnd=[];
+        sorted.forEach(function(t){
+          var ts=pd(t.start),te=pd(t.end);
+          if(!ts||!te){t._lane=0;return;}
+          var lane=0;
+          while(laneEnd[lane]&&laneEnd[lane]>ts)lane++;
+          laneEnd[lane]=te; t._lane=lane;
+        });
+        var nLanes=Math.max(1,laneEnd.length);
+        var lh=Math.floor((ROW_H-6)/nLanes);
+        var minBarH=Math.max(6,lh-2);
+
+        sorted.forEach(function(t){
+          var ts=pd(t.start),te=pd(t.end);
+          if(!ts||!te)return;
+          var bx=xOf(ts),bw=Math.max(xOf(te)-bx,4);
+          var by=cy+3+(t._lane||0)*lh;
+          var bh=minBarH;
+          var pct=(t.pctComplete||0)/100;
+
+          // Background track
+          ctx.fillStyle='#e0e0e0'; ctx.fillRect(bx,by,bw,bh);
+          // Progress fill
+          if(pct>0){ctx.fillStyle=color;ctx.fillRect(bx,by,bw*pct,bh);}
+          // Border
+          ctx.strokeStyle=color;ctx.lineWidth=1;ctx.strokeRect(bx,by,bw,bh);
+
+          // Store for dependency arrows and tooltips
+          taskPos[t.code]={x1:bx,x2:bx+bw,y1:by,y2:by+bh,cy:by+bh/2,task:t,act:act};
+
+          // Label if bar wide enough
+          if(bw>35){
+            ctx.save();ctx.beginPath();ctx.rect(bx+2,by,bw-4,bh);ctx.clip();
+            ctx.fillStyle=pct>0.55?'#fff':'#333';ctx.font='8px Arial';
+            ctx.fillText(t.name,bx+3,by+bh-3);ctx.restore();
+          }
+        });
+      }
+      cy+=ROW_H;
+    }
+  });
+
+  // Dependency arrows (drawn after all bars so arrows appear on top)
+  rows.filter(function(r){return r.type==='act';}).forEach(function(row){
+    row.act.tasks.forEach(function(t){
+      if(!t.dependsOn)return;
+      var from=taskPos[t.dependsOn],to=taskPos[t.code];
+      if(!from||!to)return;
+      ctx.save();ctx.strokeStyle='#e53935';ctx.lineWidth=1.5;ctx.setLineDash([3,2]);
+      ctx.beginPath();
+      ctx.moveTo(from.x2,from.cy);
+      var mx=(from.x2+to.x1)/2;
+      ctx.bezierCurveTo(mx,from.cy,mx,to.cy,to.x1,to.cy);
+      ctx.stroke();ctx.setLineDash([]);
+      // Arrowhead
+      ctx.fillStyle='#e53935';ctx.beginPath();
+      ctx.moveTo(to.x1,to.cy);ctx.lineTo(to.x1-6,to.cy-4);ctx.lineTo(to.x1-6,to.cy+4);
+      ctx.closePath();ctx.fill();ctx.restore();
+    });
+  });
+
+  document.getElementById('loading').style.display='none';
+
+  // Sync scroll
+  var lb=document.getElementById('lbody');
+  panel.onscroll=function(){lb.scrollTop=Math.max(0,panel.scrollTop-HDR_H);};
+
+  // Tooltip on hover
+  cv.onmousemove=function(e){
+    var rect=cv.getBoundingClientRect();
+    var mx=e.clientX-rect.left, my=e.clientY-rect.top;
+    var tip=document.getElementById('tooltip');
+    var hit=null;
+    Object.keys(taskPos).forEach(function(k){
+      var p=taskPos[k];
+      if(mx>=p.x1&&mx<=p.x2&&my>=p.y1&&my<=p.y2)hit=p;
+    });
+    if(hit){
+      var t=hit.task,a=hit.act;
+      tip.innerHTML='<b>'+t.code+'</b><br>'+t.name+'<br>'+'Activity: '+a.code+'<br>'+'Assigned: '+t.assignedTo+'<br>'+'Dates: '+(t.start||'?')+' → '+(t.end||'?')+'<br>'+'Complete: '+(t.pctComplete||0)+'%'+(t.dependsOn?'<br>Depends on: '+t.dependsOn:'');
+      tip.style.display='block';tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY-10)+'px';
+    } else {tip.style.display='none';}
+  };
+  cv.onmouseleave=function(){document.getElementById('tooltip').style.display='none';};
+}
+
+google.script.run
+  .withSuccessHandler(function(data){
+    RAW=data;
+    // populate sub-output dropdown
+    var subs=[...new Set(data.activities.map(function(a){return a.subOutput;}))].sort();
+    var subSel=document.getElementById('fSub');
+    subs.forEach(function(s){var o=document.createElement('option');o.value=s;o.textContent=s;subSel.appendChild(o);});
+    FILTERED=data.activities.slice();
+    drawLabels();
+    drawChart();
+  })
+  .withFailureHandler(function(e){
+    document.getElementById('loading').textContent='Error: '+e.message;
+  })
+  .getGanttData();
+
+window.onresize=function(){if(FILTERED)drawChart();};
+</script>
+</body>
+</html>
+`;
 
 // =============================================================================
 // EMAIL NOTIFICATIONS
@@ -775,6 +1161,10 @@ const ADD_TASK_HTML = `
 <label>Weight (% of activity this task represents; all tasks should sum to 100)
   <input id="weight" type="number" min="0" max="100" placeholder="e.g. 25">
 </label>
+<label>Depends On (Task Code)
+  <input id="dependsOn" type="text" placeholder="e.g. 1.1-1.T1 — leave blank if no dependency">
+  <small style="color:#666;font-size:11px">This task cannot start until the task entered here is complete</small>
+</label>
 <button onclick="submit()">Add Task</button>
 <button onclick="google.script.host.close()" style="background:#888">Cancel</button>
 <div id="msg"></div>
@@ -797,13 +1187,14 @@ const ADD_TASK_HTML = `
       assignedTo:      document.getElementById('assignedTo').value.trim(),
       plannedStart:    document.getElementById('startDate').value,
       plannedEnd:      document.getElementById('endDate').value,
-      weight:          document.getElementById('weight').value
+      weight:          document.getElementById('weight').value,
+      dependsOn:       document.getElementById('dependsOn').value.trim()
     };
     if (!data.activityCode || !data.taskName || !data.assignedTo) {
       show('Please fill in all required fields (*).', 'error'); return;
     }
     google.script.run
-      .withSuccessHandler(function(code) { show('Task saved! Code: ' + code, 'success'); })
+      .withSuccessHandler(function(code) { show('Task saved! Code: ' + code + '. You can add another task or close.', 'success'); })
       .withFailureHandler(function(e)    { show('Error: ' + e.message, 'error'); })
       .saveTask(data);
   }

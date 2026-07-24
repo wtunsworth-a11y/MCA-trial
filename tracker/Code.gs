@@ -246,7 +246,6 @@ function setupTasksSheet(ss) {
     .setAllowInvalid(false)
     .build();
   sh.getRange(2, 14, 500, 1).setDataValidation(statusRule);
-  sh.getRange(2, 14, 500, 1).setValue('Not Started');
 
   sh.setFrozenRows(1);
   sh.setColumnWidth(1, 110);
@@ -341,99 +340,96 @@ function setupDashboardSheet(ss) {
   sh.clearContents();
   sh.clearFormats();
 
-  // Title
-  sh.getRange('A1').setValue('MCA PROJECT TRACKER — DASHBOARD');
-  sh.getRange('A1').setFontSize(16).setFontWeight('bold').setFontColor('#1c4587');
-  sh.getRange('B1').setFormula('=NOW()');
-  sh.getRange('B1').setNumberFormat('dd MMM yyyy HH:mm').setFontColor('#666666');
-  sh.getRange('A1:N1').setBackground('#c9daf8');
-
-  sh.getRange('A2').setValue('⚠ Only APPROVED progress entries are reflected below.');
-  sh.getRange('A2').setFontColor('#cc0000').setFontStyle('italic');
-
-  // Section headers helper
   const sectionStyle = (range) => range.setFontWeight('bold').setFontColor('#ffffff').setBackground('#1c4587');
 
-  // ---- PENDING APPROVALS ----
-  let row = 4;
-  sectionStyle(sh.getRange(row, 1, 1, 6).merge());
-  sh.getRange(row, 1).setValue('PENDING APPROVALS');
-  row++;
-  const pendingHeaders = ['Entry ID', 'Task Code', 'Activity Code', 'Submitted By', 'Submitted Date', '% Complete'];
-  sh.getRange(row, 1, 1, 6).setValues([pendingHeaders]).setFontWeight('bold').setBackground('#cfe2f3');
-  row++;
-  // QUERY formula pulling pending rows from Progress Log
-  sh.getRange(row, 1).setFormula(
-    `=IFERROR(QUERY('Progress Log'!A:N, "SELECT A,B,C,E,F,G WHERE K='Pending' ORDER BY F DESC LABEL A 'Entry ID', B 'Task Code', C 'Activity Code', E 'Submitted By', F 'Submitted Date', G '% Complete'", 0), "No pending entries")`
-  );
+  // ---- TITLE (rows 1-2) ----
+  sh.getRange('A1').setValue('MCA PROJECT TRACKER — DASHBOARD');
+  sh.getRange('A1').setFontSize(16).setFontWeight('bold').setFontColor('#1c4587');
+  sh.getRange('G1').setFormula('=NOW()');
+  sh.getRange('G1').setNumberFormat('dd MMM yyyy HH:mm').setFontColor('#666666');
+  sh.getRange('A1:G1').setBackground('#c9daf8');
+  sh.getRange('A2').setValue('Only APPROVED progress entries are reflected in the statistics below.');
+  sh.getRange('A2').setFontColor('#cc0000').setFontStyle('italic');
 
-  // ---- SUMMARY BY STRATEGIC OUTPUT ----
-  row = 20;
+  // ---- SECTION 1: SUMMARY BY STRATEGIC OUTPUT (rows 4-8) ----
+  // Uses COUNTIF/SUMPRODUCT/AVERAGEIF — fixed output, no overflow risk
+  let row = 4;
   sectionStyle(sh.getRange(row, 1, 1, 5).merge());
-  sh.getRange(row, 1).setValue('SUMMARY BY STRATEGIC OUTPUT (Approved entries only)');
+  sh.getRange(row, 1).setValue('SUMMARY BY STRATEGIC OUTPUT');
   row++;
-  const soHeaders = ['Strategic Output', 'Total Activities', 'Activities with Tasks', 'Avg % Complete', 'Status'];
-  sh.getRange(row, 1, 1, 5).setValues([soHeaders]).setFontWeight('bold').setBackground('#cfe2f3');
+  sh.getRange(row, 1, 1, 5).setValues([['Strategic Output','Total Activities','With Tasks Defined','Avg % Complete','Status']]);
+  sh.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#cfe2f3');
   row++;
-  ['SO1','SO2','SO3'].forEach((so, i) => {
-    const r = row + i;
-    const soName = so === 'SO1' ? 'SO1 – Policy & Governance' : so === 'SO2' ? 'SO2 – Awareness & Research' : 'SO3 – Livelihoods & Economy';
-    sh.getRange(r, 1).setValue(soName);
-    sh.getRange(r, 2).setFormula(`=COUNTIF(Activities!A:A,"${so}")`);
-    sh.getRange(r, 3).setFormula(
-      `=SUMPRODUCT((Activities!A$2:A$200="${so}")*(Activities!I$2:I$200>0))`
-    );
-    sh.getRange(r, 4).setFormula(
-      `=IFERROR(AVERAGEIF(Activities!A$2:A$200,"${so}",Activities!J$2:J$200),0)`
-    );
-    sh.getRange(r, 4).setNumberFormat('0%');
-    sh.getRange(r, 5).setFormula(
-      `=IF(D${r}=0,"Not Started",IF(D${r}<0.5,"In Progress",IF(D${r}<1,"Nearly Complete","Complete")))`
-    );
+  [['SO1','SO1 – Policy & Governance'],['SO2','SO2 – Awareness & Research'],['SO3','SO3 – Livelihoods & Economy']].forEach(([so, label]) => {
+    sh.getRange(row, 1).setValue(label);
+    sh.getRange(row, 2).setFormula(`=COUNTIF(Activities!A:A,"${so}")`);
+    sh.getRange(row, 3).setFormula(`=SUMPRODUCT((Activities!A$2:A$500="${so}")*(Activities!I$2:I$500>0))`);
+    sh.getRange(row, 4).setFormula(`=IFERROR(AVERAGEIF(Activities!A$2:A$500,"${so}",Activities!J$2:J$500),0)`);
+    sh.getRange(row, 4).setNumberFormat('0%');
+    sh.getRange(row, 5).setFormula(`=IF(D${row}=0,"Not Started",IF(D${row}<0.5,"In Progress",IF(D${row}<1,"Nearly Complete","Complete")))`);
+    row++;
   });
 
-  // ---- ACTIVITY PROGRESS TABLE ----
-  row = 28;
-  sectionStyle(sh.getRange(row, 1, 1, 7).merge());
-  sh.getRange(row, 1).setValue('ACTIVITY PROGRESS (Approved entries only)');
-  row++;
-  const actHeaders = ['Code', 'Activity', 'Partner', 'CI Staff', 'Scheduled', 'Tasks', '% Complete'];
-  sh.getRange(row, 1, 1, 7).setValues([actHeaders]).setFontWeight('bold').setBackground('#cfe2f3');
-  row++;
-  // Pull from Activities sheet with live % complete
-  sh.getRange(row, 1).setFormula(
-    `=IFERROR(QUERY(Activities!A:K, "SELECT C,D,G,H,E,I,J WHERE C IS NOT NULL ORDER BY A,C LABEL C 'Code', D 'Activity', G 'Partner', H 'CI Staff', E 'Scheduled', I 'Tasks', J '% Complete'", 0), "Run Refresh Dashboard first")`
-  );
-
-  // ---- BY RESPONSIBLE PARTNER ----
-  row = 130;
-  sectionStyle(sh.getRange(row, 1, 1, 3).merge());
-  sh.getRange(row, 1).setValue('PROGRESS BY RESPONSIBLE PARTNER');
-  row++;
-  sh.getRange(row, 1, 1, 3).setValues([['Partner', 'Activities', 'Avg % Complete']]).setFontWeight('bold').setBackground('#cfe2f3');
-  row++;
-  sh.getRange(row, 1).setFormula(
-    `=IFERROR(QUERY(Activities!G$2:K$200, "SELECT G, COUNT(G), AVG(J) WHERE G IS NOT NULL GROUP BY G ORDER BY G LABEL G 'Partner', COUNT(G) 'Activities', AVG(J) 'Avg % Complete'", 0), "")`
-  );
-
-  // ---- SCHEDULE STATUS ----
-  row = 155;
+  // ---- SECTION 2: SCHEDULE STATUS BY QUARTER (rows 11-30) ----
+  // Uses SUMPRODUCT — fixed 16 rows, no overflow risk
+  row = 11;
   sectionStyle(sh.getRange(row, 1, 1, 5).merge());
   sh.getRange(row, 1).setValue('SCHEDULE STATUS — Activities by Quarter');
   row++;
-  sh.getRange(row, 1, 1, 5).setValues([['Quarter', 'Count', 'Completed', 'In Progress', 'Not Started']]).setFontWeight('bold').setBackground('#cfe2f3');
+  sh.getRange(row, 1, 1, 5).setValues([['Quarter','Total','Complete','In Progress','Not Started']]);
+  sh.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#cfe2f3');
   row++;
-  ['Q1 2025','Q2 2025','Q3 2025','Q4 2025','Q1 2026','Q2 2026','Q3 2026','Q4 2026','Q1 2027','Q2 2027','Q3 2027','Q4 2027','Q1 2028','Q2 2028','Q3 2028','Q4 2028'].forEach((q, i) => {
-    const r = row + i;
-    sh.getRange(r, 1).setValue(q);
-    sh.getRange(r, 2).setFormula(`=COUNTIF(Activities!E:E,"${q}")`);
-    sh.getRange(r, 3).setFormula(`=SUMPRODUCT((Activities!E$2:E$200="${q}")*(Activities!K$2:K$200="Complete"))`);
-    sh.getRange(r, 4).setFormula(`=SUMPRODUCT((Activities!E$2:E$200="${q}")*(Activities!K$2:K$200="In Progress"))`);
-    sh.getRange(r, 5).setFormula(`=SUMPRODUCT((Activities!E$2:E$200="${q}")*(Activities!K$2:K$200="Not Started"))`);
+  ['Q1 2025','Q2 2025','Q3 2025','Q4 2025','Q1 2026','Q2 2026','Q3 2026','Q4 2026',
+   'Q1 2027','Q2 2027','Q3 2027','Q4 2027','Q1 2028','Q2 2028','Q3 2028','Q4 2028'].forEach(q => {
+    sh.getRange(row, 1).setValue(q);
+    sh.getRange(row, 2).setFormula(`=COUNTIF(Activities!E:E,"${q}")`);
+    sh.getRange(row, 3).setFormula(`=SUMPRODUCT((Activities!E$2:E$500="${q}")*(Activities!K$2:K$500="Complete"))`);
+    sh.getRange(row, 4).setFormula(`=SUMPRODUCT((Activities!E$2:E$500="${q}")*(Activities!K$2:K$500="In Progress"))`);
+    sh.getRange(row, 5).setFormula(`=SUMPRODUCT((Activities!E$2:E$500="${q}")*(Activities!K$2:K$500="Not Started"))`);
+    row++;
   });
 
-  sh.setFrozenRows(3);
-  sh.setColumnWidth(1, 120);
+  // ---- SECTION 3: PENDING APPROVALS (row 33 onwards) ----
+  // QUERY can expand freely — nothing placed below until row 200
+  row = 33;
+  sectionStyle(sh.getRange(row, 1, 1, 6).merge());
+  sh.getRange(row, 1).setValue('PENDING APPROVALS');
+  row++;
+  sh.getRange(row, 1, 1, 6).setValues([['Entry ID','Task Code','Activity Code','Submitted By','Date','% Complete']]);
+  sh.getRange(row, 1, 1, 6).setFontWeight('bold').setBackground('#cfe2f3');
+  row++;
+  sh.getRange(row, 1).setFormula(
+    `=IFERROR(QUERY('Progress Log'!A:N,"SELECT A,B,C,E,F,G WHERE K='Pending' ORDER BY F DESC",0),"No pending entries")`
+  );
+
+  // ---- SECTION 4: ACTIVITY PROGRESS (row 200 onwards) ----
+  // QUERY returns ~95 rows — nothing placed below until row 350
+  row = 200;
+  sectionStyle(sh.getRange(row, 1, 1, 7).merge());
+  sh.getRange(row, 1).setValue('ACTIVITY PROGRESS (Approved entries only)');
+  row++;
+  sh.getRange(row, 1, 1, 7).setValues([['Code','Activity','Partner','CI Staff','Scheduled','Tasks','% Complete']]);
+  sh.getRange(row, 1, 1, 7).setFontWeight('bold').setBackground('#cfe2f3');
+  row++;
+  sh.getRange(row, 1).setFormula(
+    `=IFERROR(QUERY(Activities!A:K,"SELECT C,D,G,H,E,I,J WHERE C IS NOT NULL ORDER BY A,C",0),"Run Refresh Dashboard first")`
+  );
+
+  // ---- SECTION 5: BY RESPONSIBLE PARTNER (row 350 onwards) ----
+  // QUERY expands freely — nothing below
+  row = 350;
+  sectionStyle(sh.getRange(row, 1, 1, 3).merge());
+  sh.getRange(row, 1).setValue('PROGRESS BY RESPONSIBLE PARTNER');
+  row++;
+  sh.getRange(row, 1, 1, 3).setValues([['Partner','Activities','Avg % Complete']]);
+  sh.getRange(row, 1, 1, 3).setFontWeight('bold').setBackground('#cfe2f3');
+  row++;
+  sh.getRange(row, 1).setFormula(
+    `=IFERROR(QUERY(Activities!G$2:K$500,"SELECT G,COUNT(G),AVG(J) WHERE G IS NOT NULL GROUP BY G ORDER BY G",0),"")`
+  );
+
+  sh.setFrozenRows(2);
+  sh.setColumnWidth(1, 130);
   sh.setColumnWidth(2, 320);
   sh.setColumnWidth(3, 140);
   sh.setColumnWidth(4, 120);

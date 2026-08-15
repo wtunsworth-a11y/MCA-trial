@@ -10,8 +10,12 @@ const CONFIG = {
   SHEET_ACTIVITIES: 'Activities',
   SHEET_TASKS:      'Tasks',
   SHEET_PROGRESS:   'Progress Log',
+  SHEET_BUDGET:     'Budget',
   SHEET_DASHBOARD:  'Dashboard',
 };
+
+// Exchange rate: PGK per 1 EUR (update here if rate changes)
+const PGK_PER_EUR = 5;
 
 // ---------------------------------------------------------------------------
 // Master activity list (imported from Activities_v1.csv)
@@ -146,9 +150,10 @@ function setupWorkbook() {
   setupActivitiesSheet(ss);
   setupTasksSheet(ss);
   setupProgressSheet(ss);
+  setupBudgetSheet(ss);
   setupDashboardSheet(ss);
   // Move sheets into logical order
-  const order = [CONFIG.SHEET_DASHBOARD, CONFIG.SHEET_ACTIVITIES, CONFIG.SHEET_TASKS, CONFIG.SHEET_PROGRESS];
+  const order = [CONFIG.SHEET_DASHBOARD, CONFIG.SHEET_ACTIVITIES, CONFIG.SHEET_TASKS, CONFIG.SHEET_PROGRESS, CONFIG.SHEET_BUDGET];
   order.reverse().forEach(name => {
     const sh = ss.getSheetByName(name);
     if (sh) ss.moveActiveSheet(ss.setActiveSheet(sh).getIndex()), ss.moveActiveSheet(1);
@@ -429,6 +434,77 @@ function setupDashboardSheet(ss) {
     `=IFERROR(QUERY(Activities!G$2:K$500,"SELECT G,COUNT(G),AVG(J) WHERE G IS NOT NULL GROUP BY G ORDER BY G",0),"")`
   );
 
+  // ---- SECTION 6: BUDGET SUMMARY (row 420 onwards — well clear of partner QUERY) ----
+  row = 420;
+  sectionStyle(sh.getRange(row, 1, 1, 8).merge());
+  sh.getRange(row, 1).setValue('BUDGET SUMMARY  |  Exchange rate: PGK ' + PGK_PER_EUR + ' = EUR 1  |  All totals shown in EUR equivalent');
+  row++;
+
+  // 6a: By Strategic Output × Year
+  sh.getRange(row, 1, 1, 5).setValues([['Strategic Output','Yr 4 (Jun26–May27) EUR','Yr 5 (Jun27–May28) EUR','Yr 6 (Jun28–May29) EUR','Total EUR']]);
+  sh.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#cfe2f3');
+  row++;
+  [['SO1','SO1 – Policy & Governance'],['SO2','SO2 – Awareness & Research'],['SO3','SO3 – Livelihoods & Economy']].forEach(so => {
+    const [code, label] = so;
+    sh.getRange(row, 1).setValue(label);
+    // SUMIF on Budget col A (SO) × col N (EUR equiv) × col J/K/L (years)
+    // EUR equivalent = col N; year breakdown needs separate calc per year in EUR equiv
+    // We sum col N filtered by SO and by year column having a value
+    // Simpler: sum Budget col N (EUR equiv total) — but we need year breakdown
+    // Year columns J/K/L in Budget, col A = SO, col I = currency
+    // EUR equiv per year = if EUR then year_col else year_col/PGK_PER_EUR
+    sh.getRange(row, 2).setFormula(`=IFERROR(SUMPRODUCT((Budget!A$2:A$2000="${code}")*(Budget!I$2:I$2000="EUR")*Budget!J$2:J$2000)+SUMPRODUCT((Budget!A$2:A$2000="${code}")*(Budget!I$2:I$2000="PGK")*Budget!J$2:J$2000)/${PGK_PER_EUR},0)`);
+    sh.getRange(row, 3).setFormula(`=IFERROR(SUMPRODUCT((Budget!A$2:A$2000="${code}")*(Budget!I$2:I$2000="EUR")*Budget!K$2:K$2000)+SUMPRODUCT((Budget!A$2:A$2000="${code}")*(Budget!I$2:I$2000="PGK")*Budget!K$2:K$2000)/${PGK_PER_EUR},0)`);
+    sh.getRange(row, 4).setFormula(`=IFERROR(SUMPRODUCT((Budget!A$2:A$2000="${code}")*(Budget!I$2:I$2000="EUR")*Budget!L$2:L$2000)+SUMPRODUCT((Budget!A$2:A$2000="${code}")*(Budget!I$2:I$2000="PGK")*Budget!L$2:L$2000)/${PGK_PER_EUR},0)`);
+    sh.getRange(row, 5).setFormula(`=B${row}+C${row}+D${row}`);
+    sh.getRange(row, 2, 1, 4).setNumberFormat('#,##0');
+    row++;
+  });
+  // Grand total row
+  sh.getRange(row, 1).setValue('TOTAL').setFontWeight('bold');
+  sh.getRange(row, 2).setFormula(`=IFERROR(SUMPRODUCT((Budget!I$2:I$2000="EUR")*Budget!J$2:J$2000)+SUMPRODUCT((Budget!I$2:I$2000="PGK")*Budget!J$2:J$2000)/${PGK_PER_EUR},0)`);
+  sh.getRange(row, 3).setFormula(`=IFERROR(SUMPRODUCT((Budget!I$2:I$2000="EUR")*Budget!K$2:K$2000)+SUMPRODUCT((Budget!I$2:I$2000="PGK")*Budget!K$2:K$2000)/${PGK_PER_EUR},0)`);
+  sh.getRange(row, 4).setFormula(`=IFERROR(SUMPRODUCT((Budget!I$2:I$2000="EUR")*Budget!L$2:L$2000)+SUMPRODUCT((Budget!I$2:I$2000="PGK")*Budget!L$2:L$2000)/${PGK_PER_EUR},0)`);
+  sh.getRange(row, 5).setFormula(`=B${row}+C${row}+D${row}`);
+  sh.getRange(row, 1, 1, 5).setBackground('#c9daf8').setFontWeight('bold');
+  sh.getRange(row, 2, 1, 4).setNumberFormat('#,##0');
+  row += 2;
+
+  // 6b: By Cost Category × Year
+  sectionStyle(sh.getRange(row, 1, 1, 5).merge());
+  sh.getRange(row, 1).setValue('BUDGET BY COST CATEGORY (EUR equivalent)');
+  row++;
+  sh.getRange(row, 1, 1, 5).setValues([['Category','Yr 4 EUR','Yr 5 EUR','Yr 6 EUR','Total EUR']]);
+  sh.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#cfe2f3');
+  row++;
+  ['Equipment','Capital','Consultant','Partner'].forEach(cat => {
+    sh.getRange(row, 1).setValue(cat);
+    sh.getRange(row, 2).setFormula(`=IFERROR(SUMPRODUCT((Budget!H$2:H$2000="${cat}")*(Budget!I$2:I$2000="EUR")*Budget!J$2:J$2000)+SUMPRODUCT((Budget!H$2:H$2000="${cat}")*(Budget!I$2:I$2000="PGK")*Budget!J$2:J$2000)/${PGK_PER_EUR},0)`);
+    sh.getRange(row, 3).setFormula(`=IFERROR(SUMPRODUCT((Budget!H$2:H$2000="${cat}")*(Budget!I$2:I$2000="EUR")*Budget!K$2:K$2000)+SUMPRODUCT((Budget!H$2:H$2000="${cat}")*(Budget!I$2:I$2000="PGK")*Budget!K$2:K$2000)/${PGK_PER_EUR},0)`);
+    sh.getRange(row, 4).setFormula(`=IFERROR(SUMPRODUCT((Budget!H$2:H$2000="${cat}")*(Budget!I$2:I$2000="EUR")*Budget!L$2:L$2000)+SUMPRODUCT((Budget!H$2:H$2000="${cat}")*(Budget!I$2:I$2000="PGK")*Budget!L$2:L$2000)/${PGK_PER_EUR},0)`);
+    sh.getRange(row, 5).setFormula(`=B${row}+C${row}+D${row}`);
+    sh.getRange(row, 2, 1, 4).setNumberFormat('#,##0');
+    row++;
+  });
+  row++;
+
+  // 6c: EUR vs PGK split (original currencies, not converted)
+  sectionStyle(sh.getRange(row, 1, 1, 5).merge());
+  sh.getRange(row, 1).setValue('BUDGET BY CURRENCY (original amounts — not converted)');
+  row++;
+  sh.getRange(row, 1, 1, 5).setValues([['Currency','Yr 4','Yr 5','Yr 6','Total']]);
+  sh.getRange(row, 1, 1, 5).setFontWeight('bold').setBackground('#cfe2f3');
+  row++;
+  ['EUR','PGK'].forEach(cur => {
+    sh.getRange(row, 1).setValue(cur);
+    sh.getRange(row, 2).setFormula(`=IFERROR(SUMIF(Budget!I$2:I$2000,"${cur}",Budget!J$2:J$2000),0)`);
+    sh.getRange(row, 3).setFormula(`=IFERROR(SUMIF(Budget!I$2:I$2000,"${cur}",Budget!K$2:K$2000),0)`);
+    sh.getRange(row, 4).setFormula(`=IFERROR(SUMIF(Budget!I$2:I$2000,"${cur}",Budget!L$2:L$2000),0)`);
+    sh.getRange(row, 5).setFormula(`=B${row}+C${row}+D${row}`);
+    sh.getRange(row, 2, 1, 4).setNumberFormat('#,##0.00');
+    row++;
+  });
+
   sh.setFrozenRows(2);
   sh.setColumnWidth(1, 130);
   sh.setColumnWidth(2, 320);
@@ -445,6 +521,17 @@ function setupDashboardSheet(ss) {
 
 function onEdit(e) {
   const sh = e.range.getSheet();
+
+  // Budget sheet auto-fills
+  if (sh.getName() === CONFIG.SHEET_BUDGET) {
+    const col = e.range.getColumn();
+    const row = e.range.getRow();
+    if (row < 2) return;
+    if (col === 3) autoFillBudgetFromActivity(sh, row, e.value); // Activity Code entered
+    if (col === 5) autoFillBudgetFromTask(sh, row, e.value);     // Task Code entered
+    return;
+  }
+
   if (sh.getName() !== CONFIG.SHEET_PROGRESS) return;
 
   const col = e.range.getColumn();
@@ -686,6 +773,144 @@ function getActivityCodes() {
   return data
     .filter(r => r[2]) // skip blank rows
     .map(r => ({ code: r[2], name: r[3], partner: r[6] }));
+}
+
+// =============================================================================
+// BUDGET SHEET
+// =============================================================================
+
+function setupBudgetSheet(ss) {
+  let sh = ss.getSheetByName(CONFIG.SHEET_BUDGET);
+  if (!sh) sh = ss.insertSheet(CONFIG.SHEET_BUDGET);
+  sh.clearContents();
+  sh.clearFormats();
+
+  const headers = [
+    'Strategic Output', 'Sub-Output', 'Activity Code', 'Activity Name',
+    'Task Code', 'Task Name', 'Responsible Partner',
+    'Cost Category', 'Currency',
+    'Yr 4 (Jun 26–May 27)', 'Yr 5 (Jun 27–May 28)', 'Yr 6 (Jun 28–May 29)',
+    'Total', 'EUR Equivalent', 'Notes'
+  ];
+  sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+  styleHeaderRow(sh, headers.length);
+
+  // Exchange rate note in row 1 col P
+  sh.getRange(1, 16).setValue('Rate: PGK ' + PGK_PER_EUR + ' = EUR 1');
+  sh.getRange(1, 16).setFontStyle('italic').setFontColor('#666666').setBackground('#f3f3f3');
+
+  // Data validation — Activity Code (col 3)
+  const actSh = ss.getSheetByName(CONFIG.SHEET_ACTIVITIES);
+  const actRule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(actSh.getRange('C2:C500'), true)
+    .setAllowInvalid(true)
+    .build();
+  sh.getRange(2, 3, 1000, 1).setDataValidation(actRule);
+
+  // Cost Category (col 8)
+  const catRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['Equipment', 'Capital', 'Consultant', 'Partner'], true)
+    .setAllowInvalid(false)
+    .build();
+  sh.getRange(2, 8, 1000, 1).setDataValidation(catRule);
+
+  // Currency (col 9)
+  const currRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['EUR', 'PGK'], true)
+    .setAllowInvalid(false)
+    .build();
+  sh.getRange(2, 9, 1000, 1).setDataValidation(currRule);
+  sh.getRange(2, 9, 1000, 1).setValue('EUR');
+
+  // Number format for amount columns (10-14)
+  sh.getRange(2, 10, 1000, 5).setNumberFormat('#,##0.00');
+
+  // Total formula (col 13) = sum of Yr4+Yr5+Yr6
+  // EUR Equivalent (col 14) = if EUR then Total else Total/PGK_PER_EUR
+  // These are set as formulas row by row via a helper, or we set them as array-style below
+  // We'll set them per-row in onEdit, but also set a template note
+  sh.getRange(2, 13).setFormula('=IF(J2+K2+L2=0,"",J2+K2+L2)');
+  sh.getRange(2, 14).setFormula('=IF(M2="","",IF(I2="EUR",M2,M2/' + PGK_PER_EUR + '))');
+
+  // Freeze header, set column widths
+  sh.setFrozenRows(1);
+  sh.setColumnWidth(1, 110);
+  sh.setColumnWidth(2, 90);
+  sh.setColumnWidth(3, 90);
+  sh.setColumnWidth(4, 260);
+  sh.setColumnWidth(5, 100);
+  sh.setColumnWidth(6, 220);
+  sh.setColumnWidth(7, 130);
+  sh.setColumnWidth(8, 110);
+  sh.setColumnWidth(9, 70);
+  sh.setColumnWidth(10, 130);
+  sh.setColumnWidth(11, 130);
+  sh.setColumnWidth(12, 130);
+  sh.setColumnWidth(13, 110);
+  sh.setColumnWidth(14, 110);
+  sh.setColumnWidth(15, 220);
+
+  // Conditional formatting by SO
+  const so1Rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$A2="SO1"').setBackground('#d9ead3')
+    .setRanges([sh.getRange('A2:O1000')]).build();
+  const so2Rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$A2="SO2"').setBackground('#dae8fc')
+    .setRanges([sh.getRange('A2:O1000')]).build();
+  const so3Rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$A2="SO3"').setBackground('#fff2cc')
+    .setRanges([sh.getRange('A2:O1000')]).build();
+  sh.setConditionalFormatRules([so1Rule, so2Rule, so3Rule]);
+
+  // Helper note for users
+  sh.getRange(2, 1).setNote(
+    'How to use:\n' +
+    '1. Type or select an Activity Code in column C — columns A, B, D, G fill automatically\n' +
+    '2. Optionally enter a Task Code in column E — column F fills automatically\n' +
+    '3. Select Cost Category and Currency\n' +
+    '4. Enter amounts for each project year\n' +
+    '5. Total and EUR Equivalent calculate automatically\n\n' +
+    'Copy row 2 formulas (cols M & N) down as you add new rows.'
+  );
+}
+
+function autoFillBudgetFromActivity(sh, row, actCode) {
+  if (!actCode) return;
+  const actSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_ACTIVITIES);
+  const data = actSh.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][2] === actCode) {
+      sh.getRange(row, 1).setValue(data[i][0]); // Strategic Output
+      sh.getRange(row, 2).setValue(data[i][1]); // Sub-Output
+      sh.getRange(row, 4).setValue(data[i][3]); // Activity Name
+      sh.getRange(row, 7).setValue(data[i][6]); // Partner
+      // Set Total and EUR Equivalent formulas for this row
+      sh.getRange(row, 13).setFormula('=IF(J' + row + '+K' + row + '+L' + row + '=0,"",J' + row + '+K' + row + '+L' + row + ')');
+      sh.getRange(row, 14).setFormula('=IF(M' + row + '="","",IF(I' + row + '="EUR",M' + row + ',M' + row + '/' + PGK_PER_EUR + '))');
+      sh.getRange(row, 13).setNumberFormat('#,##0.00');
+      sh.getRange(row, 14).setNumberFormat('#,##0.00');
+      break;
+    }
+  }
+}
+
+function autoFillBudgetFromTask(sh, row, taskCode) {
+  if (!taskCode) return;
+  const taskSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_TASKS);
+  if (taskSh.getLastRow() < 2) return;
+  const data = taskSh.getRange(2, 1, taskSh.getLastRow() - 1, 15).getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0] === taskCode) {
+      sh.getRange(row, 6).setValue(data[i][5]); // Task Name
+      // Also fill activity if not already filled
+      const existingAct = sh.getRange(row, 3).getValue();
+      if (!existingAct) {
+        sh.getRange(row, 3).setValue(data[i][1]);
+        autoFillBudgetFromActivity(sh, row, data[i][1]);
+      }
+      break;
+    }
+  }
 }
 
 // =============================================================================
